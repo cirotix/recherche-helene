@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="robots" content="noindex">
+<title>Carte de recherche – Champs-sur-Marne</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  html,body{height:100%;margin:0;font-family:system-ui,-apple-system,sans-serif}
+  #map{position:absolute;inset:0}
+  .bar{position:absolute;z-index:1000;left:8px;right:8px;top:calc(8px + env(safe-area-inset-top,0px));display:flex;gap:6px;flex-wrap:wrap;pointer-events:none}
+  .bar>*{pointer-events:auto}
+  .card{background:#fff;border-radius:8px;box-shadow:0 1px 6px rgba(0,0,0,.3);padding:6px 10px;font-size:14px}
+  button{font:inherit;font-weight:600;border:0;border-radius:8px;padding:9px 12px;background:#1f5f8b;color:#fff;box-shadow:0 1px 6px rgba(0,0,0,.3);cursor:pointer}
+  button.red{background:#c01818}
+  .lbl{font:700 13px/1 ui-monospace,monospace;color:#123;text-shadow:0 0 3px #fff,0 0 3px #fff,0 0 3px #fff;white-space:nowrap;text-align:center}
+  .lbl small{display:block;font:600 10px system-ui;margin-top:2px}
+  .legend{position:absolute;z-index:1000;left:8px;bottom:calc(20px + env(safe-area-inset-bottom,0px));font-size:12px;line-height:1.6}
+  .legend i{display:inline-block;width:12px;height:12px;border:1px solid #555;margin-right:5px;vertical-align:-2px}
+  .leaflet-popup-content{font-size:14px;min-width:220px}
+  .leaflet-popup-content a{font-weight:600}
+  .pop select,.pop input,.pop textarea{font:inherit;width:100%;box-sizing:border-box;margin:3px 0 6px;padding:6px;border:1px solid #bbb;border-radius:6px}
+  .pop textarea{min-height:50px}
+  .pop button{box-shadow:none;width:100%}
+  .msg{font-size:12px;color:#555;margin-top:4px}
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div class="bar">
+  <div class="card" id="info">Secteurs de 500 m · touchez un carré</div>
+  <button id="loc" type="button">📍 Ma position</button>
+  <button id="home" type="button">🏠 Domicile</button>
+  <button id="sig" class="red" type="button" hidden>⚠️ Signaler ici</button>
+</div>
+<div class="legend card">
+  <div><i style="background:rgba(255,255,255,.1)"></i>À faire</div>
+  <div><i style="background:#f3c64a"></i>En cours</div>
+  <div><i style="background:#4f9a6a"></i>Fait</div>
+  <div><i style="background:#d0453a"></i>Signalement / à refaire</div>
+  <div id="maj" style="color:#666"></div>
+</div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="config.js?v=2"></script>
+<script>
+// Grille : colonnes A-G (ouest→est), lignes 1-6 (nord→sud), carrés d'environ 500 m
+var COLS="ABCDEFG", ROWS=6, LAT0=48.8665, LON0=2.5765, DLAT=0.0045, DLON=0.0068;
+var ADDRESS="34 rue Berthelot 77420 Champs-sur-Marne";
+var API=(window.RECHERCHE_API||"").replace(/\/$/,"");
+var COLORS={todo:null,doing:"#f3c64a",done:"#4f9a6a",alert:"#d0453a"};
+var LABELS={todo:"À faire",doing:"En cours",done:"Fait",alert:"Signalement / à refaire"};
+function ls(k,v){try{if(v===undefined)return localStorage.getItem(k);localStorage.setItem(k,v);}catch(e){return null;}}
+function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(x){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[x];});}
+function hhmm(t){var d=new Date(t);return ("0"+d.getHours()).slice(-2)+"h"+("0"+d.getMinutes()).slice(-2);}
+
+var map=L.map("map",{zoomControl:false}).setView([48.853,2.6],14);
+L.control.zoom({position:"bottomright"}).addTo(map);
+L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",{maxZoom:19,
+  attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'}).addTo(map);
+
+var cells={}, status={}, pointsLayer=L.layerGroup().addTo(map);
+function bounds(c,r){var n=LAT0-(r-1)*DLAT, w=LON0+c*DLON; return [[n-DLAT,w],[n,w+DLON]];}
+for(var c=0;c<COLS.length;c++)for(var r=1;r<=ROWS;r++){
+  (function(id,b){
+    var rect=L.rectangle(b,{color:"#1f5f8b",weight:2,fillOpacity:.05}).addTo(map);
+    var ctr=L.latLngBounds(b).getCenter();
+    var lbl=L.marker(ctr,{interactive:false,icon:L.divIcon({className:"",html:'<div class="lbl">'+id+'</div>',iconSize:[60,30],iconAnchor:[30,15]})}).addTo(map);
+    rect.on("click",function(){openCell(id);});
+    cells[id]={rect:rect,lbl:lbl,center:ctr,b:b};
+  })(COLS[c]+r,bounds(c,r));
+}
+map.fitBounds([[LAT0-ROWS*DLAT,LON0],[LAT0,LON0+COLS.length*DLON]]);
+
+function getCode(){
+  var c=ls("rc_code");
+  if(!c){c=prompt("Code équipe (donné sur le groupe WhatsApp) :");if(c)ls("rc_code",c.trim());}
+  return c&&c.trim();
+}
+function post(path,body){
+  body.code=getCode();
+  return fetch(API+path,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)})
+    .then(function(r){if(r.status===403){ls("rc_code","");throw new Error("Code incorrect");}if(!r.ok)throw new Error("Erreur "+r.status);return r.json();});
+}
+
+var openId=null;
+function openCell(id){
+  openId=id;
+  var s=status[id]||{}, k=s.s||"todo", c=cells[id].center;
+  var gm="https://www.google.com/maps/dir/?api=1&destination="+c.lat.toFixed(5)+","+c.lng.toFixed(5)+"&travelmode=walking";
+  var link=location.origin+location.pathname+"?s="+id;
+  var html='<div class="pop"><b>Secteur '+id+'</b> · '+LABELS[k]+(s.t?' <span class="msg">('+hhmm(s.t)+')</span>':'')+
+    (s.e?'<br>Équipe : '+esc(s.e):'')+(s.n?'<br>'+esc(s.n):'')+
+    '<br><a href="'+gm+'" target="_blank" rel="noopener">Itinéraire à pied</a> · <a href="#" id="cp">Copier le lien du secteur</a>';
+  if(API){
+    html+='<hr><select id="fs">'+Object.keys(LABELS).map(function(x){return '<option value="'+x+'"'+(x===k?" selected":"")+'>'+LABELS[x]+'</option>';}).join("")+'</select>'+
+      '<input id="fe" placeholder="Équipe (prénoms)" value="'+esc(s.e)+'">'+
+      '<textarea id="fn" placeholder="Note : affiches posées, ce qui a été vu…">'+esc(s.n)+'</textarea>'+
+      '<button id="fsave" type="button">Enregistrer</button><div class="msg" id="fmsg"></div>';
+  }
+  html+='</div>';
+  L.popup().setLatLng(c).setContent(html).openOn(map);
+  var cp=document.getElementById("cp");
+  cp.onclick=function(e){e.preventDefault();(navigator.clipboard?navigator.clipboard.writeText(link):Promise.reject()).then(function(){cp.textContent="Lien copié";},function(){prompt("Lien du secteur :",link);});};
+  if(API)document.getElementById("fsave").onclick=function(){
+    var m=document.getElementById("fmsg");m.textContent="Enregistrement…";
+    post("/sector",{id:id,s:document.getElementById("fs").value,e:document.getElementById("fe").value,n:document.getElementById("fn").value})
+      .then(function(j){status[id]=j.meta;paint();m.textContent="Enregistré.";setTimeout(function(){map.closePopup();},600);})
+      .catch(function(err){m.textContent=err.message;});
+  };
+}
+function paint(){
+  Object.keys(cells).forEach(function(id){
+    var s=status[id]||{}, col=COLORS[s.s||"todo"], sel=(focusId===id);
+    cells[id].rect.setStyle({fillColor:col||"#1f5f8b",fillOpacity:col?.35:.05,weight:sel?5:2,color:sel?"#c01818":"#1f5f8b"});
+    cells[id].lbl.setIcon(L.divIcon({className:"",html:'<div class="lbl">'+id+(s.e?"<small>"+esc(s.e)+"</small>":"")+"</div>",iconSize:[90,34],iconAnchor:[45,17]}));
+  });
+}
+function drawPoints(points){
+  pointsLayer.clearLayers();
+  (points||[]).forEach(function(p){
+    var m=L.circleMarker([p.lat,p.lng],{radius:10,color:"#fff",weight:3,fillColor:"#ff7a00",fillOpacity:1}).addTo(pointsLayer);
+    m.bindPopup('<div class="pop"><b>⚠️ Signalement '+hhmm(p.t)+'</b>'+(p.who?' – '+esc(p.who):'')+'<br>'+esc(p.txt)+
+      '<br><button type="button" data-del="'+esc(p.id)+'" style="margin-top:8px;background:#777">Retirer (traité)</button></div>');
+  });
+}
+map.on("popupopen",function(e){
+  var b=e.popup.getElement().querySelector("[data-del]");
+  if(b)b.onclick=function(){post("/point/delete",{id:b.getAttribute("data-del")}).then(function(){map.closePopup();load();}).catch(function(err){alert(err.message);});};
+});
+function load(){
+  var src=API?API+"/state":"status.json?t="+Date.now();
+  fetch(src,{cache:"no-store"}).then(function(r){return r.json();}).then(function(j){
+    status=j.secteurs||{}; drawPoints(j.points);
+    document.getElementById("maj").textContent="Mis à jour "+hhmm(Date.now());
+    if(openId===null)paint(); else paint();
+  }).catch(function(){document.getElementById("maj").textContent="Hors connexion";});
+}
+
+var focusId=(new URLSearchParams(location.search).get("s")||"").toUpperCase();
+if(cells[focusId]){map.fitBounds(cells[focusId].b,{padding:[30,30]});document.getElementById("info").textContent="Votre secteur : "+focusId;}
+paint(); load(); setInterval(load,API?10000:60000);
+map.on("popupclose",function(){openId=null;});
+
+// Domicile (Base Adresse Nationale)
+var homeLatLng=null;
+fetch("https://api-adresse.data.gouv.fr/search/?limit=1&q="+encodeURIComponent(ADDRESS)).then(function(r){return r.json();}).then(function(j){
+  var f=j.features&&j.features[0]; if(!f)return;
+  homeLatLng=[f.geometry.coordinates[1],f.geometry.coordinates[0]];
+  L.circleMarker(homeLatLng,{radius:9,color:"#fff",weight:3,fillColor:"#c01818",fillOpacity:1}).addTo(map)
+    .bindPopup("<b>Domicile</b><br>"+esc(f.properties.label)+"<br>Vue samedi à 16h30");
+}).catch(function(){});
+document.getElementById("home").onclick=function(){if(homeLatLng)map.setView(homeLatLng,17);};
+
+// Position du bénévole
+var me=null, meAcc=null, first=true, myPos=null;
+document.getElementById("loc").onclick=function(){first=true;map.locate({watch:true,enableHighAccuracy:true});};
+map.on("locationfound",function(e){
+  myPos=e.latlng;
+  if(!me){me=L.circleMarker(e.latlng,{radius:8,color:"#fff",weight:3,fillColor:"#1a73e8",fillOpacity:1}).addTo(map);
+    meAcc=L.circle(e.latlng,{radius:e.accuracy,weight:1,color:"#1a73e8",fillOpacity:.1}).addTo(map);}
+  else{me.setLatLng(e.latlng);meAcc.setLatLng(e.latlng).setRadius(e.accuracy);}
+  if(first){map.setView(e.latlng,17);first=false;}
+});
+map.on("locationerror",function(){alert("Position indisponible : autorisez la localisation pour ce site.");});
+
+// Signalement à ma position (ou au centre de la carte)
+if(API){
+  var sig=document.getElementById("sig"); sig.hidden=false;
+  sig.onclick=function(){
+    var p=myPos||map.getCenter();
+    var txt=prompt((myPos?"Signalement à votre position":"Signalement au centre de la carte (activez 📍 pour votre position)")+"\nQu'avez-vous vu ou appris ?");
+    if(!txt)return;
+    var who=ls("rc_who")||prompt("Votre prénom :")||""; ls("rc_who",who);
+    post("/point",{lat:p.lat,lng:p.lng,txt:txt,who:who}).then(load).catch(function(err){alert(err.message);});
+  };
+}
+</script>
+</body>
+</html>
