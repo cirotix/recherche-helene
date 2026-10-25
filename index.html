@@ -31,6 +31,7 @@
   .pop textarea{min-height:50px}
   .pop button{box-shadow:none;width:100%}
   .msg{font-size:12px;color:#555;margin-top:4px}
+  .msg.err{color:#c01818;font-size:15px;font-weight:700}
   .pop button.go{background:#1f8f4e;font-size:16px;padding:12px}
   .pop button.stop{background:#c01818;font-size:16px;padding:12px}
   .pop details{margin-top:8px;font-size:13px}
@@ -113,24 +114,24 @@ map.fitBounds([[LAT0-ROWS*DLAT,LON0],[LAT0,LON0+COLS.length*DLON]],{paddingTopLe
 function zoomClass(){document.getElementById("map").classList.toggle("far",map.getZoom()<15);}
 map.on("zoomend",zoomClass); zoomClass();
 
-function getCode(){
-  var c=ls("rc_code");
-  if(!c){c=prompt("Code équipe (donné sur le groupe WhatsApp) :");if(c)ls("rc_code",c.trim());}
-  return c&&c.trim();
+// Codes saisis dans la fiche (pas de fenêtre prompt(), que les navigateurs peuvent bloquer)
+function codeField(){return ls("rc_code")?"":'<input id="fcode" placeholder="Code équipe (voir le groupe WhatsApp)" autocomplete="off">';}
+function adminField(){return ls("rc_admin")?"":'<input id="fadmin" placeholder="Code coordinateur" autocomplete="off">';}
+function keepCodes(root){
+  var c=root.querySelector("#fcode"), a=root.querySelector("#fadmin");
+  if(c&&c.value.trim())ls("rc_code",c.value.trim());
+  if(a&&a.value.trim())ls("rc_admin",a.value.trim());
 }
-function getAdmin(){
-  var c=ls("rc_admin");
-  if(!c){c=prompt("Code coordinateur :");if(c)ls("rc_admin",c.trim());}
-  return c&&c.trim();
-}
+function codeError(msg,kind){var e=new Error(msg);e.kind=kind;return e;}
 function post(path,body){
-  body.code=getCode();
+  body.code=ls("rc_code");
+  if(!body.code)return Promise.reject(codeError("Indiquez le code équipe.","code"));
   return fetch(API+path,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)})
     .then(function(r){return r.json().catch(function(){return {};}).then(function(j){
-      if(r.status===403&&j.error==="code"){ls("rc_code","");throw new Error("Code équipe incorrect");}
-      if(r.status===403&&j.error==="admin"){ls("rc_admin","");throw new Error("Code coordinateur incorrect");}
+      if(r.status===403&&j.error==="code"){ls("rc_code","");throw codeError("Code équipe incorrect.","code");}
+      if(r.status===403&&j.error==="admin"){ls("rc_admin","");throw codeError("Code coordinateur incorrect.","admin");}
       if(!r.ok)throw new Error(j.error||("Erreur "+r.status));
-      return j;});});
+      return j;});},function(){throw new Error("Pas de connexion internet, réessayez.");});
 }
 
 var openId=null;
@@ -141,7 +142,7 @@ function statusLine(s){
   if(k==="alert")return '⚠️ Signalement / à refaire'+(s.e?' – '+esc(s.e):'');
   return 'À faire';
 }
-function openCell(id){
+function openCell(id,errMsg,errMsg2){
   openId=id;
   var s=sectorStatus[id]||{}, k=s.s||"todo", c=cells[id].center;
   var gm="https://www.google.com/maps/dir/?api=1&destination="+c.lat.toFixed(5)+","+c.lng.toFixed(5)+"&travelmode=walking";
@@ -150,7 +151,7 @@ function openCell(id){
     (s.n?'<br>'+esc(s.n):'')+
     '<br><a href="'+gm+'" target="_blank" rel="noopener">Itinéraire à pied</a> · <a href="#" id="cp">Copier le lien</a>';
   if(API){
-    html+='<hr>';
+    html+='<hr>'+codeField();
     if(k==="doing"&&isMine(id)){
       html+='<textarea id="fn" placeholder="Note : affiches posées, ce qui a été vu…">'+esc(s.n)+'</textarea>'+
         '<button id="fstop" class="stop" type="button">■ Terminer la recherche</button>';
@@ -168,7 +169,7 @@ function openCell(id){
         '<button id="fpastsave" class="go" type="button">Enregistrer comme fait</button></details>';
     }
     html+='<div class="msg" id="fmsg"></div>'+
-      '<details><summary>Correction (coordinateur)</summary><select id="fs">'+Object.keys(LABELS).map(function(x){return '<option value="'+x+'"'+(x===k?" selected":"")+'>'+LABELS[x]+'</option>';}).join("")+'</select>'+
+      '<details'+(errMsg2?' open':'')+'><summary>Correction (coordinateur)</summary>'+adminField()+'<select id="fs">'+Object.keys(LABELS).map(function(x){return '<option value="'+x+'"'+(x===k?" selected":"")+'>'+LABELS[x]+'</option>';}).join("")+'</select>'+
       '<input id="fe2" placeholder="Prénom" value="'+esc(s.e)+'">'+
       '<div class="row"><label>Début<input id="fd" type="time" value="'+esc(s.d)+'"></label>'+
       '<label>Fin<input id="ff" type="time" value="'+esc(s.f)+'"></label></div>'+
@@ -176,50 +177,60 @@ function openCell(id){
       '<button id="fsave" type="button">Enregistrer la correction</button><div class="msg" id="fmsg2"></div></details>';
   }
   html+='</div>';
-  L.popup({maxWidth:Math.min(300,window.innerWidth-40),autoPanPaddingTopLeft:[10,70]}).setLatLng(c).setContent(html).openOn(map);
-  var cp=document.getElementById("cp");
-  cp.onclick=function(e){e.preventDefault();(navigator.clipboard?navigator.clipboard.writeText(link):Promise.reject()).then(function(){cp.textContent="Lien copié";},function(){prompt("Lien du secteur :",link);});};
+  var popup=L.popup({maxWidth:Math.min(300,window.innerWidth-40),autoPanPaddingTopLeft:[10,70]}).setLatLng(c).setContent(html).openOn(map);
+  // L'ancienne fiche reste dans la page pendant son animation de fermeture :
+  // on cherche les éléments dans la nouvelle fiche, jamais avec document.getElementById
+  var root=popup.getElement();
+  function $(x){return root.querySelector("#"+x);}
+  var cp=$("cp");
+  cp.onclick=function(e){e.preventDefault();(navigator.clipboard?navigator.clipboard.writeText(link):Promise.reject()).then(function(){cp.textContent="Lien copié";},function(){cp.textContent=link;});};
   if(!API)return;
   // Messages affichés près du bouton utilisé
-  var m=document.getElementById("fmsg"), m2=document.getElementById("fmsg2");
+  var m=$("fmsg"), m2=$("fmsg2");
+  function say(el,txt,isErr){el.textContent=txt;el.className=isErr?"msg err":"msg";}
+  if(errMsg)say(m,errMsg,true);
+  if(errMsg2)say(m2,errMsg2,true);
   function saved(j){sectorStatus[id]=j.meta;paint();openCell(id);}
-  function failed(err){m.textContent=err.message;}
-  var bStart=document.getElementById("fstart"), bStop=document.getElementById("fstop"), bPast=document.getElementById("fpastsave");
+  // Code refusé : on rouvre la fiche pour faire apparaître le champ du code
+  function failed(err){if(err.kind)openCell(id,err.message);else say(m,err.message,true);}
+  var bStart=$("fstart"), bStop=$("fstop"), bPast=$("fpastsave");
   function firstName(){
-    var who=document.getElementById("fe").value.trim();
-    if(!who){m.textContent="Indiquez votre prénom.";return "";}
+    keepCodes(root);
+    var who=$("fe").value.trim();
+    if(!who){say(m,"Indiquez votre prénom.",true);return "";}
     ls("rc_who",who); return who;
   }
   if(bPast)bPast.onclick=function(){
     var who=firstName(); if(!who)return;
-    var d=document.getElementById("pd").value, f=document.getElementById("pf").value;
-    if(!d||!f){m.textContent="Indiquez l'heure de début et de fin.";return;}
-    m.textContent="Enregistrement…";
-    post("/sector/done",{id:id,e:who,d:d,f:f,n:document.getElementById("pn").value}).then(saved).catch(failed);
+    var d=$("pd").value, f=$("pf").value;
+    if(!d||!f){say(m,"Indiquez l'heure de début et de fin.",true);return;}
+    say(m,"Enregistrement…");
+    post("/sector/done",{id:id,e:who,d:d,f:f,n:$("pn").value}).then(saved).catch(failed);
   };
   if(bStart)bStart.onclick=function(){
     var who=firstName(); if(!who)return;
-    m.textContent="Enregistrement…";
+    say(m,"Enregistrement…");
     post("/sector/start",{id:id,e:who,o:DEVICE}).then(function(j){
       var mm=mine(); mm[id]=j.meta.ds; ls("rc_mine",JSON.stringify(mm)); saved(j);
     }).catch(failed);
   };
   if(bStop)bStop.onclick=function(){
-    m.textContent="Enregistrement…";
-    post("/sector/stop",{id:id,o:DEVICE,n:document.getElementById("fn").value}).then(function(j){
+    keepCodes(root); say(m,"Enregistrement…");
+    post("/sector/stop",{id:id,o:DEVICE,n:$("fn").value}).then(function(j){
       var mm=mine(); delete mm[id]; ls("rc_mine",JSON.stringify(mm)); saved(j);
     }).catch(failed);
   };
-  document.getElementById("fs").onchange=function(){
-    var fd=document.getElementById("fd"), ff=document.getElementById("ff");
+  $("fs").onchange=function(){
+    var fd=$("fd"), ff=$("ff");
     if((this.value==="doing"||this.value==="done")&&!fd.value)fd.value=nowHHMM();
     if(this.value==="done"&&!ff.value)ff.value=nowHHMM();
   };
-  document.getElementById("fsave").onclick=function(){
-    var admin=getAdmin(); if(!admin){m2.textContent="Code coordinateur requis.";return;}
-    m2.textContent="Enregistrement…";
-    post("/sector",{admin:admin,id:id,s:document.getElementById("fs").value,e:document.getElementById("fe2").value,n:document.getElementById("fn2").value,
-      d:document.getElementById("fd").value,f:document.getElementById("ff").value}).then(saved).catch(function(err){m2.textContent=err.message;});
+  $("fsave").onclick=function(){
+    keepCodes(root);
+    var admin=ls("rc_admin"); if(!admin){say(m2,"Indiquez le code coordinateur.",true);return;}
+    say(m2,"Enregistrement…");
+    post("/sector",{admin:admin,id:id,s:$("fs").value,e:$("fe2").value,n:$("fn2").value,d:$("fd").value,f:$("ff").value})
+      .then(saved).catch(function(err){if(err.kind)openCell(id,"",err.message);else say(m2,err.message,true);});
   };
 }
 // Résumé et liste des secteurs, mis à jour à chaque rafraîchissement
@@ -262,7 +273,7 @@ function drawPoints(points){
 }
 map.on("popupopen",function(e){
   var b=e.popup.getElement().querySelector("[data-del]");
-  if(b)b.onclick=function(){post("/point/delete",{id:b.getAttribute("data-del")}).then(function(){map.closePopup();load();}).catch(function(err){alert(err.message);});};
+  if(b)b.onclick=function(){post("/point/delete",{id:b.getAttribute("data-del")}).then(function(){map.closePopup();load();}).catch(function(err){b.textContent=err.message;});};
 });
 function applyState(j){
   sectorStatus=j.secteurs||{}; drawPoints(j.points); paint();
@@ -322,12 +333,26 @@ map.on("locationerror",function(){alert("Position indisponible : autorisez la lo
 // Signalement à ma position (ou au centre de la carte)
 if(API){
   var sig=document.getElementById("sig"); sig.hidden=false;
-  sig.onclick=function(){
-    var p=myPos||map.getCenter();
-    var txt=prompt((myPos?"Signalement à votre position":"Signalement au centre de la carte (activez 📍 pour votre position)")+"\nQu'avez-vous vu ou appris ?");
-    if(!txt)return;
-    var who=ls("rc_who")||prompt("Votre prénom :")||""; ls("rc_who",who);
-    post("/point",{lat:p.lat,lng:p.lng,txt:txt,who:who}).then(load).catch(function(err){alert(err.message);});
+  sig.onclick=function(){openSignal();};
+}
+function openSignal(errMsg){
+  var p=myPos||map.getCenter();
+  var html='<div class="pop"><b>⚠️ Signaler '+(myPos?"à votre position":"au centre de la carte")+'</b>'+
+    (myPos?'':'<div class="msg">Pour votre position exacte, touchez d\'abord 📍</div>')+
+    codeField()+
+    '<textarea id="stxt" placeholder="Qu\'avez-vous vu ou appris ?"></textarea>'+
+    '<input id="swho" placeholder="Votre prénom" value="'+esc(ls("rc_who")||"")+'">'+
+    '<button id="ssend" class="stop" type="button">Envoyer le signalement</button><div class="msg" id="smsg"></div></div>';
+  var popup=L.popup({maxWidth:Math.min(300,window.innerWidth-40),autoPanPaddingTopLeft:[10,70]}).setLatLng(p).setContent(html).openOn(map);
+  var root=popup.getElement(), msg=root.querySelector("#smsg");
+  if(errMsg){msg.textContent=errMsg;msg.className="msg err";}
+  root.querySelector("#ssend").onclick=function(){
+    keepCodes(root);
+    var txt=root.querySelector("#stxt").value.trim(), who=root.querySelector("#swho").value.trim();
+    if(!txt){msg.textContent="Décrivez ce que vous avez vu.";msg.className="msg err";return;}
+    ls("rc_who",who); msg.textContent="Envoi…"; msg.className="msg";
+    post("/point",{lat:p.lat,lng:p.lng,txt:txt,who:who}).then(function(){map.closePopup();load();})
+      .catch(function(err){if(err.kind)openSignal(err.message);else{msg.textContent=err.message;msg.className="msg err";}});
   };
 }
 </script>
