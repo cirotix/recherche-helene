@@ -7,42 +7,60 @@
 <title>Carte de recherche – Champs-sur-Marne</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <style>
-  html,body{height:100%;margin:0;font-family:system-ui,-apple-system,sans-serif}
+  html,body{height:100%;margin:0;overflow:hidden;font-family:system-ui,-apple-system,sans-serif}
   #map{position:absolute;inset:0}
   .bar{position:absolute;z-index:1000;left:8px;right:8px;top:calc(8px + env(safe-area-inset-top,0px));display:flex;gap:6px;flex-wrap:wrap;pointer-events:none}
   .bar>*{pointer-events:auto}
   .card{background:#fff;border-radius:8px;box-shadow:0 1px 6px rgba(0,0,0,.3);padding:6px 10px;font-size:14px}
-  button{font:inherit;font-weight:600;border:0;border-radius:8px;padding:9px 12px;background:#1f5f8b;color:#fff;box-shadow:0 1px 6px rgba(0,0,0,.3);cursor:pointer}
+  button,a.btn{font:inherit;font-weight:600;border:0;border-radius:8px;padding:9px 12px;background:#1f5f8b;color:#fff;box-shadow:0 1px 6px rgba(0,0,0,.3);cursor:pointer;text-decoration:none;white-space:nowrap}
   button.red{background:#c01818}
-  .lbl{font:700 13px/1 ui-monospace,monospace;color:#123;text-shadow:0 0 3px #fff,0 0 3px #fff,0 0 3px #fff;white-space:nowrap;text-align:center}
+  #sig{position:absolute;z-index:1000;right:10px;bottom:calc(110px + env(safe-area-inset-bottom,0px));padding:12px 14px;font-size:15px}
+  a.btn.wa{background:#1f8f4e}
+  a.btn.avis{background:#fff;color:#c01818}
+  .pop .row{display:flex;gap:6px}
+  .pop .row label{flex:1;font-size:12px;color:#555}
+  .pop .row input{margin-top:2px}
+  .lbl{height:100%;display:flex;flex-direction:column;justify-content:center;align-items:center;font:700 13px/1 ui-monospace,monospace;color:#123;text-shadow:0 0 3px #fff,0 0 3px #fff,0 0 3px #fff;white-space:nowrap;text-align:center}
   .lbl small{display:block;font:600 10px system-ui;margin-top:2px}
   .legend{position:absolute;z-index:1000;left:8px;bottom:calc(20px + env(safe-area-inset-bottom,0px));font-size:12px;line-height:1.6}
   .legend i{display:inline-block;width:12px;height:12px;border:1px solid #555;margin-right:5px;vertical-align:-2px}
   .leaflet-popup-content{font-size:14px;min-width:220px}
   .leaflet-popup-content a{font-weight:600}
-  .pop select,.pop input,.pop textarea{font:inherit;width:100%;box-sizing:border-box;margin:3px 0 6px;padding:6px;border:1px solid #bbb;border-radius:6px}
+  .pop select,.pop input,.pop textarea{font:16px system-ui;width:100%;box-sizing:border-box;margin:3px 0 6px;padding:6px;border:1px solid #bbb;border-radius:6px}
   .pop textarea{min-height:50px}
   .pop button{box-shadow:none;width:100%}
   .msg{font-size:12px;color:#555;margin-top:4px}
+  /* Mobile : une seule ligne de boutons, légende compacte */
+  @media (max-width:520px){
+    .bar{gap:5px;flex-wrap:nowrap}
+    button,a.btn{padding:8px 9px;font-size:13px}
+    .long{display:none}
+    .legend{font-size:11px;line-height:1.4;padding:4px 8px;max-width:calc(100% - 80px);display:flex;flex-wrap:wrap;column-gap:10px}
+    .legend>#info,.legend>#maj{flex-basis:100%}
+    .legend i{width:10px;height:10px;margin-right:3px}
+    .leaflet-popup-content{min-width:0;margin:10px 12px}
+  }
 </style>
 </head>
 <body>
 <div id="map"></div>
 <div class="bar">
-  <div class="card" id="info">Secteurs de 500 m · touchez un carré</div>
-  <button id="loc" type="button">📍 Ma position</button>
-  <button id="home" type="button">🏠 Domicile</button>
-  <button id="sig" class="red" type="button" hidden>⚠️ Signaler ici</button>
+  <a class="btn avis" href="avis.pdf" target="_blank" rel="noopener">📄 Avis<span class="long"> de recherche</span></a>
+  <a class="btn wa" href="https://chat.whatsapp.com/LS5cOXgQGb734BAaxjvMIm" target="_blank" rel="noopener">💬 WhatsApp</a>
+  <button id="loc" type="button">📍<span class="long"> Ma position</span></button>
+  <button id="home" type="button">🏠<span class="long"> Domicile</span></button>
 </div>
+<button id="sig" class="red" type="button" hidden>⚠️ Signaler</button>
 <div class="legend card">
+  <div id="info" style="font-weight:600">Touchez un carré</div>
   <div><i style="background:rgba(255,255,255,.1)"></i>À faire</div>
   <div><i style="background:#f3c64a"></i>En cours</div>
   <div><i style="background:#4f9a6a"></i>Fait</div>
-  <div><i style="background:#d0453a"></i>Signalement / à refaire</div>
+  <div><i style="background:#d0453a"></i>Signalement</div>
   <div id="maj" style="color:#666"></div>
 </div>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="config.js?v=2"></script>
+<script src="config.js?v=3"></script>
 <script>
 // Grille : colonnes A-K (ouest→est), lignes 1-9 (nord→sud), carrés d'environ 500 m
 // Bord nord sur la Marne ; élargie à l'ouest, à l'est et surtout au sud
@@ -53,9 +71,10 @@ var COLORS={todo:null,doing:"#f3c64a",done:"#4f9a6a",alert:"#d0453a"};
 var LABELS={todo:"À faire",doing:"En cours",done:"Fait",alert:"Signalement / à refaire"};
 function ls(k,v){try{if(v===undefined)return localStorage.getItem(k);localStorage.setItem(k,v);}catch(e){return null;}}
 function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(x){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[x];});}
+function nowHHMM(){var d=new Date();return ("0"+d.getHours()).slice(-2)+":"+("0"+d.getMinutes()).slice(-2);}
 function hhmm(t){var d=new Date(t);return ("0"+d.getHours()).slice(-2)+"h"+("0"+d.getMinutes()).slice(-2);}
 
-var map=L.map("map",{zoomControl:false}).setView([48.853,2.6],14);
+var map=L.map("map",{zoomControl:false,zoomSnap:0.25}).setView([48.853,2.6],14);
 L.control.zoom({position:"bottomright"}).addTo(map);
 L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",{maxZoom:19,
   attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'}).addTo(map);
@@ -71,7 +90,7 @@ for(var c=0;c<COLS.length;c++)for(var r=1;r<=ROWS;r++){
     cells[id]={rect:rect,lbl:lbl,center:ctr,b:b};
   })(COLS[c]+r,bounds(c,r));
 }
-map.fitBounds([[LAT0-ROWS*DLAT,LON0],[LAT0,LON0+COLS.length*DLON]]);
+map.fitBounds([[LAT0-ROWS*DLAT,LON0],[LAT0,LON0+COLS.length*DLON]],{paddingTopLeft:[0,50]});
 
 function getCode(){
   var c=ls("rc_code");
@@ -91,30 +110,41 @@ function openCell(id){
   var gm="https://www.google.com/maps/dir/?api=1&destination="+c.lat.toFixed(5)+","+c.lng.toFixed(5)+"&travelmode=walking";
   var link=location.origin+location.pathname+"?s="+id;
   var html='<div class="pop"><b>Secteur '+id+'</b> · '+LABELS[k]+(s.t?' <span class="msg">('+hhmm(s.t)+')</span>':'')+
-    (s.e?'<br>Équipe : '+esc(s.e):'')+(s.n?'<br>'+esc(s.n):'')+
+    (s.e?'<br>Équipe : '+esc(s.e):'')+(s.d||s.f?'<br>Recherche : '+(s.d||'?')+' → '+(s.f||'…'):'')+(s.n?'<br>'+esc(s.n):'')+
     '<br><a href="'+gm+'" target="_blank" rel="noopener">Itinéraire à pied</a> · <a href="#" id="cp">Copier le lien du secteur</a>';
   if(API){
     html+='<hr><select id="fs">'+Object.keys(LABELS).map(function(x){return '<option value="'+x+'"'+(x===k?" selected":"")+'>'+LABELS[x]+'</option>';}).join("")+'</select>'+
       '<input id="fe" placeholder="Équipe (prénoms)" value="'+esc(s.e)+'">'+
+      '<div class="row"><label>Début<input id="fd" type="time" value="'+esc(s.d)+'"></label>'+
+      '<label>Fin<input id="ff" type="time" value="'+esc(s.f)+'"></label></div>'+
       '<textarea id="fn" placeholder="Note : affiches posées, ce qui a été vu…">'+esc(s.n)+'</textarea>'+
       '<button id="fsave" type="button">Enregistrer</button><div class="msg" id="fmsg"></div>';
   }
   html+='</div>';
-  L.popup().setLatLng(c).setContent(html).openOn(map);
+  L.popup({maxWidth:Math.min(300,window.innerWidth-40),autoPanPaddingTopLeft:[10,70]}).setLatLng(c).setContent(html).openOn(map);
   var cp=document.getElementById("cp");
   cp.onclick=function(e){e.preventDefault();(navigator.clipboard?navigator.clipboard.writeText(link):Promise.reject()).then(function(){cp.textContent="Lien copié";},function(){prompt("Lien du secteur :",link);});};
-  if(API)document.getElementById("fsave").onclick=function(){
+  if(API){
+  // Préremplit l'heure de début en passant « En cours », l'heure de fin en passant « Fait »
+  document.getElementById("fs").onchange=function(){
+    var v=this.value, fd=document.getElementById("fd"), ff=document.getElementById("ff");
+    if(v==="doing"&&!fd.value)fd.value=nowHHMM();
+    if(v==="done"){if(!fd.value)fd.value=nowHHMM();if(!ff.value)ff.value=nowHHMM();}
+  };
+  document.getElementById("fsave").onclick=function(){
     var m=document.getElementById("fmsg");m.textContent="Enregistrement…";
-    post("/sector",{id:id,s:document.getElementById("fs").value,e:document.getElementById("fe").value,n:document.getElementById("fn").value})
+    post("/sector",{id:id,s:document.getElementById("fs").value,e:document.getElementById("fe").value,n:document.getElementById("fn").value,
+      d:document.getElementById("fd").value,f:document.getElementById("ff").value})
       .then(function(j){status[id]=j.meta;paint();m.textContent="Enregistré.";setTimeout(function(){map.closePopup();},600);})
       .catch(function(err){m.textContent=err.message;});
   };
+  }
 }
 function paint(){
   Object.keys(cells).forEach(function(id){
     var s=status[id]||{}, col=COLORS[s.s||"todo"], sel=(focusId===id);
     cells[id].rect.setStyle({fillColor:col||"#1f5f8b",fillOpacity:col?.35:.05,weight:sel?5:2,color:sel?"#c01818":"#1f5f8b"});
-    cells[id].lbl.setIcon(L.divIcon({className:"",html:'<div class="lbl">'+id+(s.e?"<small>"+esc(s.e)+"</small>":"")+"</div>",iconSize:[90,34],iconAnchor:[45,17]}));
+    cells[id].lbl.setIcon(L.divIcon({className:"",html:'<div class="lbl">'+id+(s.e?"<small>"+esc(s.e)+"</small>":"")+(s.d?"<small>"+esc(s.d)+"–"+esc(s.f||"")+"</small>":"")+"</div>",iconSize:[90,46],iconAnchor:[45,23]}));
   });
 }
 function drawPoints(points){

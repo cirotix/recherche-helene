@@ -1,7 +1,7 @@
 // Worker Cloudflare – partage en direct de la recherche
 // Bindings : KV namespace "STATUS" ; variable secrète "CODE" (code équipe partagé sur WhatsApp)
-// GET  /state            -> {secteurs:{A1:{s,e,n,t}}, points:[{id,lat,lng,txt,t,who}]}
-// POST /sector  {code,id,s,e,n}
+// GET  /state            -> {secteurs:{A1:{s,e,n,d,f,t}}, points:[{id,lat,lng,txt,t,who}]}
+// POST /sector  {code,id,s,e,n,d,f}  (d/f : heures de début/fin "HH:MM")
 // POST /point   {code,lat,lng,txt,who}
 // POST /point/delete {code,id}
 
@@ -13,6 +13,7 @@ const CORS = {
 const json = (o, st = 200) =>
   new Response(JSON.stringify(o), { status: st, headers: { "Content-Type": "application/json", "Cache-Control": "no-store", ...CORS } });
 const clip = (s, n) => String(s ?? "").slice(0, n);
+const hhmm = (s) => (/^\d{2}:\d{2}$/.test(s || "") ? s : "");
 
 export default {
   async fetch(req, env) {
@@ -43,7 +44,7 @@ export default {
     if (url.pathname === "/sector") {
       if (!/^[A-Z]\d{1,2}$/.test(b.id || "")) return json({ error: "id" }, 400);
       if (!["todo", "doing", "done", "alert"].includes(b.s)) return json({ error: "s" }, 400);
-      const meta = { s: b.s, e: clip(b.e, 60), n: clip(b.n, 300), t: Date.now() };
+      const meta = { s: b.s, e: clip(b.e, 60), n: clip(b.n, 300), d: hhmm(b.d), f: hhmm(b.f), t: Date.now() };
       await env.STATUS.put("s:" + b.id, "1", { metadata: meta });
       return json({ ok: true, meta });
     }
