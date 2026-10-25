@@ -2,7 +2,7 @@
 # Déploie le worker Cloudflare et branche la carte dessus. Lancer depuis le dossier du dépôt.
 set -e
 W="npx -y wrangler@4"
-$W login
+$W whoami 2>&1 | grep -q "You are logged in" || $W login
 if grep -q KV_ID wrangler.toml; then
   ID=$($W kv namespace create recherche-status | grep -oE '[0-9a-f]{32}' | head -1)
   sed -i.bak "s/KV_ID/$ID/" wrangler.toml && rm -f wrangler.toml.bak
