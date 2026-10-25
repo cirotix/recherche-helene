@@ -2,6 +2,10 @@ name = "recherche-helene"
 main = "worker.js"
 compatibility_date = "2024-09-23"
 
-[[kv_namespaces]]
-binding = "STATUS"
-id = "25482323b3684c1cabc2ebe4db1b07ac"
+[[durable_objects.bindings]]
+name = "SEARCH"
+class_name = "Search"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Search"]
