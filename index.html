@@ -173,14 +173,15 @@ function openCell(id){
       '<div class="row"><label>Début<input id="fd" type="time" value="'+esc(s.d)+'"></label>'+
       '<label>Fin<input id="ff" type="time" value="'+esc(s.f)+'"></label></div>'+
       '<textarea id="fn2" placeholder="Note">'+esc(s.n)+'</textarea>'+
-      '<button id="fsave" type="button">Enregistrer la correction</button></details>';
+      '<button id="fsave" type="button">Enregistrer la correction</button><div class="msg" id="fmsg2"></div></details>';
   }
   html+='</div>';
   L.popup({maxWidth:Math.min(300,window.innerWidth-40),autoPanPaddingTopLeft:[10,70]}).setLatLng(c).setContent(html).openOn(map);
   var cp=document.getElementById("cp");
   cp.onclick=function(e){e.preventDefault();(navigator.clipboard?navigator.clipboard.writeText(link):Promise.reject()).then(function(){cp.textContent="Lien copié";},function(){prompt("Lien du secteur :",link);});};
   if(!API)return;
-  var m=document.getElementById("fmsg");
+  // Messages affichés près du bouton utilisé
+  var m=document.getElementById("fmsg"), m2=document.getElementById("fmsg2");
   function saved(j){sectorStatus[id]=j.meta;paint();openCell(id);}
   function failed(err){m.textContent=err.message;}
   var bStart=document.getElementById("fstart"), bStop=document.getElementById("fstop"), bPast=document.getElementById("fpastsave");
@@ -209,11 +210,16 @@ function openCell(id){
       var mm=mine(); delete mm[id]; ls("rc_mine",JSON.stringify(mm)); saved(j);
     }).catch(failed);
   };
+  document.getElementById("fs").onchange=function(){
+    var fd=document.getElementById("fd"), ff=document.getElementById("ff");
+    if((this.value==="doing"||this.value==="done")&&!fd.value)fd.value=nowHHMM();
+    if(this.value==="done"&&!ff.value)ff.value=nowHHMM();
+  };
   document.getElementById("fsave").onclick=function(){
-    m.textContent="Enregistrement…";
-    var admin=getAdmin(); if(!admin){m.textContent="";return;}
+    var admin=getAdmin(); if(!admin){m2.textContent="Code coordinateur requis.";return;}
+    m2.textContent="Enregistrement…";
     post("/sector",{admin:admin,id:id,s:document.getElementById("fs").value,e:document.getElementById("fe2").value,n:document.getElementById("fn2").value,
-      d:document.getElementById("fd").value,f:document.getElementById("ff").value}).then(saved).catch(failed);
+      d:document.getElementById("fd").value,f:document.getElementById("ff").value}).then(saved).catch(function(err){m2.textContent=err.message;});
   };
 }
 // Résumé et liste des secteurs, mis à jour à chaque rafraîchissement
