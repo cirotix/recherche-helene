@@ -22,6 +22,7 @@
   .pop .row input{margin-top:2px}
   .lbl{height:100%;display:flex;flex-direction:column;justify-content:center;align-items:center;font:700 13px/1 ui-monospace,monospace;color:#123;text-shadow:0 0 3px #fff,0 0 3px #fff,0 0 3px #fff;white-space:nowrap;text-align:center}
   .lbl small{display:block;font:600 10px system-ui;margin-top:2px}
+  #map.far .lbl small{display:none}
   .legend{position:absolute;z-index:1000;left:8px;bottom:calc(20px + env(safe-area-inset-bottom,0px));font-size:12px;line-height:1.6}
   .legend i{display:inline-block;width:12px;height:12px;border:1px solid #555;margin-right:5px;vertical-align:-2px}
   .leaflet-popup-content{font-size:14px;min-width:220px}
@@ -30,13 +31,22 @@
   .pop textarea{min-height:50px}
   .pop button{box-shadow:none;width:100%}
   .msg{font-size:12px;color:#555;margin-top:4px}
+  .pop button.go{background:#1f8f4e;font-size:16px;padding:12px}
+  .pop button.stop{background:#c01818;font-size:16px;padding:12px}
+  .pop details{margin-top:8px;font-size:13px}
+  .pop summary{color:#555;cursor:pointer}
+  .st{display:inline-block;padding:1px 6px;border-radius:4px;font-size:12px;font-weight:600}
+  #sum{cursor:pointer;font-weight:600;color:#1f5f8b}
+  #list{max-height:40vh;overflow:auto;margin:4px 0;border-top:1px solid #ddd}
+  #list div{padding:5px 0;border-bottom:1px solid #eee;cursor:pointer}
+  #info.mine{color:#1f8f4e;cursor:pointer;text-decoration:underline}
   /* Mobile : une seule ligne de boutons, légende compacte */
   @media (max-width:520px){
     .bar{gap:5px;flex-wrap:nowrap}
     button,a.btn{padding:8px 9px;font-size:13px}
     .long{display:none}
     .legend{font-size:11px;line-height:1.4;padding:4px 8px;max-width:calc(100% - 80px);display:flex;flex-wrap:wrap;column-gap:10px}
-    .legend>#info,.legend>#maj{flex-basis:100%}
+    .legend>#info,.legend>#maj,.legend>#sum,.legend>#list{flex-basis:100%}
     .legend i{width:10px;height:10px;margin-right:3px}
     .leaflet-popup-content{min-width:0;margin:10px 12px}
   }
@@ -53,6 +63,8 @@
 <button id="sig" class="red" type="button" hidden>⚠️ Signaler</button>
 <div class="legend card">
   <div id="info" style="font-weight:600">Touchez un carré</div>
+  <div id="sum" hidden></div>
+  <div id="list" hidden></div>
   <div><i style="background:rgba(255,255,255,.1)"></i>À faire</div>
   <div><i style="background:#f3c64a"></i>En cours</div>
   <div><i style="background:#4f9a6a"></i>Fait</div>
@@ -72,6 +84,11 @@ var LABELS={todo:"À faire",doing:"En cours",done:"Fait",alert:"Signalement / à
 function ls(k,v){try{if(v===undefined)return localStorage.getItem(k);localStorage.setItem(k,v);}catch(e){return null;}}
 function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(x){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[x];});}
 function nowHHMM(){var d=new Date();return ("0"+d.getHours()).slice(-2)+":"+("0"+d.getMinutes()).slice(-2);}
+function since(ds){var m=Math.max(0,Math.round((Date.now()-ds)/60000));return m<60?m+" min":Math.floor(m/60)+" h "+("0"+m%60).slice(-2);}
+// Jeton de cet appareil : seul l'appareil qui a commencé un secteur peut le terminer
+var DEVICE=ls("rc_dev"); if(!DEVICE){DEVICE=Date.now().toString(36)+Math.random().toString(36).slice(2,10);ls("rc_dev",DEVICE);}
+function mine(){try{return JSON.parse(ls("rc_mine")||"{}");}catch(e){return {};}}
+function isMine(id){var s=sectorStatus[id];return !!(s&&s.s==="doing"&&s.ds&&mine()[id]===s.ds);}
 function hhmm(t){var d=new Date(t);return ("0"+d.getHours()).slice(-2)+"h"+("0"+d.getMinutes()).slice(-2);}
 
 var map=L.map("map",{zoomControl:false,zoomSnap:0.25}).setView([48.853,2.6],14);
@@ -79,7 +96,7 @@ L.control.zoom({position:"bottomright"}).addTo(map);
 L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",{maxZoom:19,
   attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'}).addTo(map);
 
-var cells={}, status={}, pointsLayer=L.layerGroup().addTo(map);
+var cells={}, sectorStatus={}, pointsLayer=L.layerGroup().addTo(map);
 function bounds(c,r){var n=LAT0-(r-1)*DLAT, w=LON0+c*DLON; return [[n-DLAT,w],[n,w+DLON]];}
 for(var c=0;c<COLS.length;c++)for(var r=1;r<=ROWS;r++){
   (function(id,b){
@@ -91,6 +108,9 @@ for(var c=0;c<COLS.length;c++)for(var r=1;r<=ROWS;r++){
   })(COLS[c]+r,bounds(c,r));
 }
 map.fitBounds([[LAT0-ROWS*DLAT,LON0],[LAT0,LON0+COLS.length*DLON]],{paddingTopLeft:[0,50]});
+// Vue éloignée : seulement les numéros de secteur, les détails apparaissent en zoomant
+function zoomClass(){document.getElementById("map").classList.toggle("far",map.getZoom()<15);}
+map.on("zoomend",zoomClass); zoomClass();
 
 function getCode(){
   var c=ls("rc_code");
@@ -100,52 +120,105 @@ function getCode(){
 function post(path,body){
   body.code=getCode();
   return fetch(API+path,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)})
-    .then(function(r){if(r.status===403){ls("rc_code","");throw new Error("Code incorrect");}if(!r.ok)throw new Error("Erreur "+r.status);return r.json();});
+    .then(function(r){return r.json().catch(function(){return {};}).then(function(j){
+      if(r.status===403&&j.error==="code"){ls("rc_code","");throw new Error("Code équipe incorrect");}
+      if(!r.ok)throw new Error(j.error||("Erreur "+r.status));
+      return j;});});
 }
 
 var openId=null;
+function statusLine(s){
+  var k=s.s||"todo";
+  if(k==="doing")return '▶ En cours'+(s.e?' – '+esc(s.e):'')+(s.d?', depuis '+esc(s.d):'')+(s.ds?' ('+since(s.ds)+')':'');
+  if(k==="done")return '✓ Fait'+(s.e?' – '+esc(s.e):'')+(s.d||s.f?', '+esc(s.d||'?')+' → '+esc(s.f||'?'):'');
+  if(k==="alert")return '⚠️ Signalement / à refaire'+(s.e?' – '+esc(s.e):'');
+  return 'À faire';
+}
 function openCell(id){
   openId=id;
-  var s=status[id]||{}, k=s.s||"todo", c=cells[id].center;
+  var s=sectorStatus[id]||{}, k=s.s||"todo", c=cells[id].center;
   var gm="https://www.google.com/maps/dir/?api=1&destination="+c.lat.toFixed(5)+","+c.lng.toFixed(5)+"&travelmode=walking";
   var link=location.origin+location.pathname+"?s="+id;
-  var html='<div class="pop"><b>Secteur '+id+'</b> · '+LABELS[k]+(s.t?' <span class="msg">('+hhmm(s.t)+')</span>':'')+
-    (s.e?'<br>Équipe : '+esc(s.e):'')+(s.d||s.f?'<br>Recherche : '+(s.d||'?')+' → '+(s.f||'…'):'')+(s.n?'<br>'+esc(s.n):'')+
-    '<br><a href="'+gm+'" target="_blank" rel="noopener">Itinéraire à pied</a> · <a href="#" id="cp">Copier le lien du secteur</a>';
+  var html='<div class="pop"><b>Secteur '+id+'</b><br><span class="st" style="background:'+(COLORS[k]||"#eee")+'">'+statusLine(s)+'</span>'+
+    (s.n?'<br>'+esc(s.n):'')+
+    '<br><a href="'+gm+'" target="_blank" rel="noopener">Itinéraire à pied</a> · <a href="#" id="cp">Copier le lien</a>';
   if(API){
-    html+='<hr><select id="fs">'+Object.keys(LABELS).map(function(x){return '<option value="'+x+'"'+(x===k?" selected":"")+'>'+LABELS[x]+'</option>';}).join("")+'</select>'+
-      '<input id="fe" placeholder="Équipe (prénoms)" value="'+esc(s.e)+'">'+
+    html+='<hr>';
+    if(k==="doing"&&isMine(id)){
+      html+='<textarea id="fn" placeholder="Note : affiches posées, ce qui a été vu…">'+esc(s.n)+'</textarea>'+
+        '<button id="fstop" class="stop" type="button">■ Terminer la recherche</button>';
+    }else if(k==="doing"){
+      html+='<div class="msg">Seule l\'équipe qui a commencé peut terminer ce secteur.</div>';
+    }else{
+      html+='<input id="fe" placeholder="Équipe (prénoms)" value="'+esc(ls("rc_team")||"")+'">'+
+        '<button id="fstart" class="go" type="button">▶ Commencer la recherche</button>';
+    }
+    html+='<div class="msg" id="fmsg"></div>'+
+      '<details><summary>Correction (coordinateur)</summary><select id="fs">'+Object.keys(LABELS).map(function(x){return '<option value="'+x+'"'+(x===k?" selected":"")+'>'+LABELS[x]+'</option>';}).join("")+'</select>'+
+      '<input id="fe2" placeholder="Équipe (prénoms)" value="'+esc(s.e)+'">'+
       '<div class="row"><label>Début<input id="fd" type="time" value="'+esc(s.d)+'"></label>'+
       '<label>Fin<input id="ff" type="time" value="'+esc(s.f)+'"></label></div>'+
-      '<textarea id="fn" placeholder="Note : affiches posées, ce qui a été vu…">'+esc(s.n)+'</textarea>'+
-      '<button id="fsave" type="button">Enregistrer</button><div class="msg" id="fmsg"></div>';
+      '<textarea id="fn2" placeholder="Note">'+esc(s.n)+'</textarea>'+
+      '<button id="fsave" type="button">Enregistrer la correction</button></details>';
   }
   html+='</div>';
   L.popup({maxWidth:Math.min(300,window.innerWidth-40),autoPanPaddingTopLeft:[10,70]}).setLatLng(c).setContent(html).openOn(map);
   var cp=document.getElementById("cp");
   cp.onclick=function(e){e.preventDefault();(navigator.clipboard?navigator.clipboard.writeText(link):Promise.reject()).then(function(){cp.textContent="Lien copié";},function(){prompt("Lien du secteur :",link);});};
-  if(API){
-  // Préremplit l'heure de début en passant « En cours », l'heure de fin en passant « Fait »
-  document.getElementById("fs").onchange=function(){
-    var v=this.value, fd=document.getElementById("fd"), ff=document.getElementById("ff");
-    if(v==="doing"&&!fd.value)fd.value=nowHHMM();
-    if(v==="done"){if(!fd.value)fd.value=nowHHMM();if(!ff.value)ff.value=nowHHMM();}
+  if(!API)return;
+  var m=document.getElementById("fmsg");
+  function saved(j){sectorStatus[id]=j.meta;paint();openCell(id);}
+  function failed(err){m.textContent=err.message;}
+  var bStart=document.getElementById("fstart"), bStop=document.getElementById("fstop");
+  if(bStart)bStart.onclick=function(){
+    var team=document.getElementById("fe").value.trim();
+    if(!team){m.textContent="Indiquez les prénoms de l'équipe.";return;}
+    ls("rc_team",team); m.textContent="Enregistrement…";
+    post("/sector/start",{id:id,e:team,o:DEVICE}).then(function(j){
+      var mm=mine(); mm[id]=j.meta.ds; ls("rc_mine",JSON.stringify(mm)); saved(j);
+    }).catch(failed);
+  };
+  if(bStop)bStop.onclick=function(){
+    m.textContent="Enregistrement…";
+    post("/sector/stop",{id:id,o:DEVICE,n:document.getElementById("fn").value}).then(function(j){
+      var mm=mine(); delete mm[id]; ls("rc_mine",JSON.stringify(mm)); saved(j);
+    }).catch(failed);
   };
   document.getElementById("fsave").onclick=function(){
-    var m=document.getElementById("fmsg");m.textContent="Enregistrement…";
-    post("/sector",{id:id,s:document.getElementById("fs").value,e:document.getElementById("fe").value,n:document.getElementById("fn").value,
-      d:document.getElementById("fd").value,f:document.getElementById("ff").value})
-      .then(function(j){status[id]=j.meta;paint();m.textContent="Enregistré.";setTimeout(function(){map.closePopup();},600);})
-      .catch(function(err){m.textContent=err.message;});
+    m.textContent="Enregistrement…";
+    post("/sector",{id:id,s:document.getElementById("fs").value,e:document.getElementById("fe2").value,n:document.getElementById("fn2").value,
+      d:document.getElementById("fd").value,f:document.getElementById("ff").value}).then(saved).catch(failed);
   };
-  }
 }
+// Résumé et liste des secteurs, mis à jour à chaque rafraîchissement
+var listOpen=window.innerWidth>520;
+function renderList(){
+  var ids=Object.keys(sectorStatus).filter(function(id){return cells[id]&&sectorStatus[id].s&&sectorStatus[id].s!=="todo";});
+  var rank={doing:0,alert:1,done:2};
+  ids.sort(function(a,b){return rank[sectorStatus[a].s]-rank[sectorStatus[b].s]||(sectorStatus[b].t||0)-(sectorStatus[a].t||0);});
+  var n={doing:0,done:0,alert:0}; ids.forEach(function(id){n[sectorStatus[id].s]++;});
+  var sum=document.getElementById("sum"), list=document.getElementById("list");
+  sum.hidden=!ids.length;
+  sum.textContent="▶ "+n.doing+" en cours · ✓ "+n.done+" faits"+(n.alert?" · ⚠️ "+n.alert:"")+(listOpen?" ▴":" ▾");
+  list.hidden=!listOpen||!ids.length;
+  list.innerHTML=ids.map(function(id){return '<div data-id="'+id+'"><b>'+id+'</b> '+statusLine(sectorStatus[id])+(isMine(id)?' <b>(vous)</b>':'')+'</div>';}).join("");
+  var info=document.getElementById("info"), myId=ids.filter(isMine)[0];
+  if(myId){info.textContent="▶ Vous êtes sur "+myId+" depuis "+sectorStatus[myId].d+" – terminer";info.className="mine";info.onclick=function(){map.fitBounds(cells[myId].b,{padding:[30,30]});openCell(myId);};}
+  else{info.className="";info.onclick=null;info.textContent=cells[focusId]?"Votre secteur : "+focusId:"Touchez un carré";}
+}
+document.getElementById("sum").onclick=function(){listOpen=!listOpen;renderList();};
+document.getElementById("list").onclick=function(e){
+  var row=e.target.closest("[data-id]"); if(!row)return;
+  var id=row.getAttribute("data-id"); map.fitBounds(cells[id].b,{padding:[30,30]}); openCell(id);
+};
 function paint(){
   Object.keys(cells).forEach(function(id){
-    var s=status[id]||{}, col=COLORS[s.s||"todo"], sel=(focusId===id);
-    cells[id].rect.setStyle({fillColor:col||"#1f5f8b",fillOpacity:col?.35:.05,weight:sel?5:2,color:sel?"#c01818":"#1f5f8b"});
-    cells[id].lbl.setIcon(L.divIcon({className:"",html:'<div class="lbl">'+id+(s.e?"<small>"+esc(s.e)+"</small>":"")+(s.d?"<small>"+esc(s.d)+"–"+esc(s.f||"")+"</small>":"")+"</div>",iconSize:[90,46],iconAnchor:[45,23]}));
+    var s=sectorStatus[id]||{}, col=COLORS[s.s||"todo"], sel=(focusId===id);
+    cells[id].rect.setStyle({fillColor:col||"#1f5f8b",fillOpacity:col?.55:.05,weight:sel?5:2,color:sel?"#c01818":"#1f5f8b"});
+    var sub=s.s==="doing"?"▶ "+esc(s.d||""):s.s==="done"?"✓ "+esc(s.d||"")+"–"+esc(s.f||""):"";
+    cells[id].lbl.setIcon(L.divIcon({className:"",html:'<div class="lbl">'+id+(sub?"<small>"+sub+"</small>":"")+(s.e&&s.s!=="todo"?"<small>"+esc(s.e)+"</small>":"")+"</div>",iconSize:[90,46],iconAnchor:[45,23]}));
   });
+  renderList();
 }
 function drawPoints(points){
   pointsLayer.clearLayers();
@@ -162,14 +235,14 @@ map.on("popupopen",function(e){
 function load(){
   var src=API?API+"/state":"status.json?t="+Date.now();
   fetch(src,{cache:"no-store"}).then(function(r){return r.json();}).then(function(j){
-    status=j.secteurs||{}; drawPoints(j.points);
+    sectorStatus=j.secteurs||{}; drawPoints(j.points);
     document.getElementById("maj").textContent="Mis à jour "+hhmm(Date.now());
-    if(openId===null)paint(); else paint();
+    paint();
   }).catch(function(){document.getElementById("maj").textContent="Hors connexion";});
 }
 
 var focusId=(new URLSearchParams(location.search).get("s")||"").toUpperCase();
-if(cells[focusId]){map.fitBounds(cells[focusId].b,{padding:[30,30]});document.getElementById("info").textContent="Votre secteur : "+focusId;}
+if(cells[focusId])map.fitBounds(cells[focusId].b,{padding:[30,30]});
 paint(); load(); setInterval(load,API?10000:60000);
 map.on("popupclose",function(){openId=null;});
 
