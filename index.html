@@ -44,8 +44,9 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="config.js?v=2"></script>
 <script>
-// Grille : colonnes A-G (ouest→est), lignes 1-6 (nord→sud), carrés d'environ 500 m
-var COLS="ABCDEFG", ROWS=6, LAT0=48.8665, LON0=2.5765, DLAT=0.0045, DLON=0.0068;
+// Grille : colonnes A-K (ouest→est), lignes 1-9 (nord→sud), carrés d'environ 500 m
+// Bord nord sur la Marne ; élargie à l'ouest, à l'est et surtout au sud
+var COLS="ABCDEFGHIJK", ROWS=9, LAT0=48.8665, LON0=2.5629, DLAT=0.0045, DLON=0.0068;
 var ADDRESS="34 rue Berthelot 77420 Champs-sur-Marne";
 var API=(window.RECHERCHE_API||"").replace(/\/$/,"");
 var COLORS={todo:null,doing:"#f3c64a",done:"#4f9a6a",alert:"#d0453a"};
